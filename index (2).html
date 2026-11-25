@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISL Fingerspelling Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+  /* Layout: setup strip on top; camera stage on the left; reading + text builder on the right. */
+  :root {
+    --bg: #f2f4f8;
+    --surface: #ffffff;
+    --ink: #111a26;
+    --muted: #566476;
+    --line: #dbe0e8;
+    --accent: #3343c2;
+    --accent-ink: #ffffff;
+    --accent-soft: #e6e9fb;
+    --ok: #1b7a4b;
+    --warn: #a85a07;
+    --bad: #b3261e;
+    --stage: #0b1118;
+    --mark: #f2b01e;
+    --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-head: "Space Grotesk", "Inter", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e131a;
+      --surface: #161d27;
+      --ink: #e7ecf3;
+      --muted: #95a3b5;
+      --line: #263140;
+      --accent: #8f9dff;
+      --accent-ink: #0e1220;
+      --accent-soft: #222a4d;
+      --ok: #4cc38a;
+      --warn: #f0a04b;
+      --bad: #ff7b72;
+      --stage: #070b10;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 15px/1.5 var(--font-body);
+    padding-block: 20px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font: 700 1.7rem/1.15 var(--font-head); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font: 500 .78rem/1 var(--font-body); margin: 0 0 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+  .lede { margin: 6px 0 0; color: var(--muted); max-width: 62ch; }
+
+  .setup { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .step-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none; }
+  .dot[data-s="busy"] { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .dot[data-s="ok"] { background: var(--ok); }
+  .dot[data-s="bad"] { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .msg { margin: 0; color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
+  .msg b { color: var(--ink); font-weight: 600; }
+  .msg small { display: block; margin-top: 4px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .bar { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+
+  .btn {
+    font: 500 .92rem/1 var(--font-body); padding: 10px 14px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; min-width: 0; }
+
+  .stage { position: relative; width: 100%; aspect-ratio: var(--ar, 4 / 3); background: var(--stage); border-radius: 10px; overflow: hidden; }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage.mirror video, .stage.mirror canvas { transform: scaleX(-1); }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; color: #8ea0b3; }
+  .actions { margin-top: 12px; }
+  details.settings { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  .setting { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: .9rem; }
+  .setting input[type=range] { width: 160px; accent-color: var(--accent); }
+
+  .reading { text-align: center; padding: 4px 0 8px; }
+  #letter { font: 700 6.5rem/1 var(--font-head); min-height: 6.5rem; color: var(--accent); }
+  .meter, .hold { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 8px auto 0; max-width: 320px; }
+  .hold { height: 4px; }
+  .meter i, .hold i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s; }
+  .meter i.low { background: var(--warn); }
+  .hold i { background: var(--mark); }
+  #readMsg { margin: 10px 0 0; color: var(--muted); min-height: 1.5em; overflow-wrap: anywhere; }
+  .top { list-style: none; padding: 0; margin: 10px 0 0; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; min-height: 28px; }
+  .top li { padding: 3px 10px; border: 1px solid var(--line); border-radius: 99px; font-size: .85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sentence { min-height: 3.4rem; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; font: 500 1.5rem/1.35 var(--font-head); letter-spacing: .08em; overflow-wrap: anywhere; white-space: pre-wrap; margin-bottom: 8px; }
+  .hint { margin: 0 0 12px; color: var(--muted); font-size: .85rem; }
+  .sep { height: 1px; background: var(--line); margin: 16px 0; }
+
+  @media (max-width: 860px) {
+    .setup, .grid { grid-template-columns: minmax(0, 1fr); }
+    #letter { font-size: 5rem; min-height: 5rem; }
+  }
+  @media (prefers-reduced-motion: reduce) { .dot[data-s="busy"] { animation: none; } .bar i, .meter i, .hold i { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ISL Fingerspelling Reader</h1>
+    <p class="lede">Show an Indian Sign Language letter (A–Z) or number (1–9) to your camera, or upload a photo of the sign. Everything runs in this browser tab.</p>
+  </header>
+
+  <section class="setup" aria-label="Setup">
+    <div class="step" id="stepModel">
+      <div class="step-head"><span class="dot" data-s="idle"></span>1 · Model data</div>
+      <p class="msg">Choose the <b>landmarks.csv</b> file saved after training. It is read once and kept in this browser.</p>
+      <div class="bar" id="loadBar" hidden><i></i></div>
+      <div class="row">
+        <button class="btn primary" id="csvBtn" type="button">Choose landmarks.csv</button>
+        <button class="btn" id="forgetBtn" type="button" hidden>Remove saved model</button>
+        <input id="csvInput" type="file" accept=".csv,text/csv" hidden>
+      </div>
+    </div>
+    <div class="step" id="stepDet">
+      <div class="step-head"><span class="dot" data-s="busy"></span>2 · Hand detector</div>
+      <p class="msg">Loading…</p>
+      <div class="row" id="detFallback" hidden>
+        <button class="btn" id="taskBtn" type="button">Pick hand_landmarker.task</button>
+        <input id="taskInput" type="file" accept=".task" hidden>
+      </div>
+    </div>
+    <div class="step" id="stepCam">
+      <div class="step-head"><span class="dot" data-s="idle"></span>3 · Camera</div>
+      <p class="msg">Off.</p>
+    </div>
+  </section>
+
+  <main class="grid">
+    <section class="panel" aria-label="Camera and photo">
+      <div class="stage" id="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="photoCanvas" hidden></canvas>
+        <canvas id="overlay"></canvas>
+        <div class="empty" id="empty">Start the camera or upload a photo of a sign.</div>
+      </div>
+      <div class="row actions">
+        <button class="btn primary" id="startBtn" type="button">Start camera</button>
+        <button class="btn" id="stopBtn" type="button" disabled>Stop</button>
+        <button class="btn" id="photoBtn" type="button">Upload a photo</button>
+        <input id="photoInput" type="file" accept="image/*" hidden>
+      </div>
+      <details class="settings">
+        <summary>Settings</summary>
+        <label class="setting" for="threshold">Minimum confidence to add a letter
+          <input id="threshold" type="range" min="30" max="95" value="50"><b id="thVal">50%</b>
+        </label>
+        <label class="setting" for="mirrorBox"><input id="mirrorBox" type="checkbox"> Mirror the image before reading (try this if letters look wrong)</label>
+      </details>
+    </section>
+
+    <section class="panel" aria-label="Result">
+      <h2>Reading</h2>
+      <div class="reading">
+        <div id="letter" aria-live="polite">–</div>
+        <div class="meter"><i id="meterFill"></i></div>
+        <div class="hold" title="Hold steady to add the letter"><i id="holdFill"></i></div>
+        <p id="readMsg">Waiting for a sign.</p>
+        <ol class="top" id="topList"></ol>
+      </div>
+      <div class="sep"></div>
+      <h2>Text</h2>
+      <div class="sentence" id="sentence" aria-live="polite"></div>
+      <p class="hint">Hold a sign steady for about a second to add it. Lower your hand between two identical letters.</p>
+      <div class="row">
+        <button class="btn" id="spaceBtn" type="button">Space</button>
+        <button class="btn" id="backBtn" type="button">Backspace</button>
+        <button class="btn" id="clearBtn" type="button">Clear</button>
+        <button class="btn" id="speakBtn" type="button">Speak</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+/* ---------- constants (must match features.py used for training) ---------- */
+const NL = 21;                 // landmarks per hand
+const D = 2 * NL * 3 + 1;      // 127 features
+const K = 5;                   // neighbours
+const REF_CAP = 600;           // reference samples kept per sign
+const TEST_CAP = 20;           // self-check samples per sign
+const HOLD = 7;                // steady detections needed to add a letter
+const MP_VERSION = "0.10.14";
+const MP_BASES = [
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@" + MP_VERSION,
+  "https://unpkg.com/@mediapipe/tasks-vision@" + MP_VERSION,
+];
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+/* ---------- state ---------- */
+let model = null;              // {classes, N, X, y, mean, std, selfCheck}
+let landmarker = null;
+let stream = null, live = false, lastRun = 0, busy = false;
+let streak = { label: null, n: 0 }, armed = true, text = "";
+
+/* ---------- small UI helpers ---------- */
+function setStep(id, state, html) {
+  const el = $(id);
+  el.querySelector(".dot").dataset.s = state;
+  if (html != null) el.querySelector(".msg").innerHTML = html;
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+/* ---------- features: same maths as features.py landmarks_to_features ---------- */
+function toFeatures(hands) {
+  if (!hands || !hands.length) return null;
+  hands = hands.slice(0, 2);
+  const n = hands.length * NL;
+  const pts = new Float64Array(n * 3);
+  let k = 0;
+  for (const h of hands) for (const p of h) { pts[k++] = p.x; pts[k++] = p.y; pts[k++] = p.z; }
+  const mean = [0, 0, 0];
+  for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++) mean[a] += pts[i * 3 + a];
+  for (let a = 0; a < 3; a++) mean[a] /= n;
+  let scale = 0;
+  for (let i = 0; i < n; i++) {
+    for (let a = 0; a < 3; a++) pts[i * 3 + a] -= mean[a];
+    scale = Math.max(scale, Math.abs(pts[i * 3]), Math.abs(pts[i * 3 + 1]));
+  }
+  if (scale < 1e-6) return null;
+  const vec = new Float32Array(D);
+  for (let i = 0; i < n * 3; i++) vec[i] = pts[i] / scale;
+  vec[D - 1] = hands.length;
+  return vec;
+}
+function mirrorHands(hands) {
+  const m = hands.map((h) => h.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z })));
+  m.sort((a, b) => a[0].x - b[0].x);
+  return m;
+}
+
+/* ---------- k-nearest-neighbours (same idea as the KNN trained in Python) ---------- */
+function standardize(vec) {
+  const q = new Float32Array(D);
+  for (let j = 0; j < D; j++) q[j] = (vec[j] - model.mean[j]) / model.std[j];
+  return q;
+}
+function knnRaw(q) {
+  const { X, N } = model;
+  const bd = new Float64Array(K).fill(Infinity);
+  const bi = new Int32Array(K).fill(-1);
+  let worst = Infinity;
+  for (let i = 0; i < N; i++) {
+    const off = i * D;
+    let s = 0, j = 0;
+    for (; j < D; j++) { const d = X[off + j] - q[j]; s += d * d; if (s >= worst) break; }
+    if (j < D) continue;
+    let p = K - 1;
+    while (p > 0 && bd[p - 1] > s) { bd[p] = bd[p - 1]; bi[p] = bi[p - 1]; p--; }
+    bd[p] = s; bi[p] = i; worst = bd[K - 1];
+  }
+  const votes = new Map();
+  let total = 0;
+  for (let k = 0; k < K; k++) {
+    if (bi[k] < 0) continue;
+    const w = 1 / (Math.sqrt(bd[k]) + 0.1);
+    const c = model.y[bi[k]];
+    votes.set(c, (votes.get(c) || 0) + w);
+    total += w;
+  }
+  return [...votes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([c, v]) => ({ label: model.classes[c], conf: v / total }));
+}
+function classify(vec) { return knnRaw(standardize(vec)); }
+
+/* ---------- building the model from landmarks.csv ---------- */
+async function buildModel(file) {
+  const bar = $("loadBar"); const fill = bar.firstElementChild;
+  bar.hidden = false; fill.style.width = "0";
+  setStep("stepModel", "busy", "Reading <b>" + esc(file.name) + "</b>…");
+
+  const refs = new Map(), tests = new Map();
+  const offer = (map, label, vec, cap) => {
+    let c = map.get(label);
+    if (!c) { c = { seen: 0, rows: [] }; map.set(label, c); }
+    c.seen++;
+    if (c.rows.length < cap) c.rows.push(vec);
+    else { const j = Math.floor(Math.random() * c.seen); if (j < cap) c.rows[j] = vec; }
+  };
+
+  let header = null, labelIdx = -1, used = 0, skipped = 0;
+  const handleLine = (line) => {
+    if (line.charCodeAt(line.length - 1) === 13) line = line.slice(0, -1);
+    if (!line) return;
+    if (!header) {
+      header = line.split(",");
+      labelIdx = header.indexOf("label");
+      if (header[0] !== "f0" || labelIdx < D) throw new Error("This does not look like the landmarks.csv made by train.py (expected columns f0…f126, label, path, aug).");
+      return;
+    }
+    const f = line.split(",");
+    if (f.length <= labelIdx + 1) return;
+    const aug = Number(f[f.length - 1]);
+    if (aug === -1 || Number.isNaN(aug)) { skipped++; return; }
+    const vec = new Float32Array(D);
+    for (let j = 0; j < D; j++) {
+      const raw = f[j];
+      const v = raw === "" ? NaN : +raw;
+      if (!Number.isFinite(v)) { skipped++; return; }
+      vec[j] = v;
+    }
+    const label = f[labelIdx].trim();
+    used++;
+    if (Math.random() < 0.06) offer(tests, label, vec, TEST_CAP);
+    else offer(refs, label, vec, REF_CAP);
+  };
+
+  const reader = file.stream().getReader();
+  const dec = new TextDecoder();
+  let buf = "", bytes = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    bytes += value.length;
+    buf += dec.decode(value, { stream: true });
+    let start = 0, nl;
+    while ((nl = buf.indexOf("\n", start)) >= 0) { handleLine(buf.slice(start, nl)); start = nl + 1; }
+    buf = buf.slice(start);
+    fill.style.width = Math.min(90, (bytes / file.size) * 90) + "%";
+    await tick();
+  }
+  buf += dec.decode();
+  if (buf) handleLine(buf);
+  if (!refs.size) throw new Error("No usable rows were found in this file.");
+
+  const classes = [...refs.keys()].sort();
+  const cidx = new Map(classes.map((c, i) => [c, i]));
+  let N = 0;
+  for (const c of refs.values()) N += c.rows.length;
+  const X = new Float32Array(N * D), y = new Uint8Array(N);
+  let r = 0;
+  for (const [label, c] of refs) for (const row of c.rows) { X.set(row, r * D); y[r++] = cidx.get(label); }
+
+  const mean = new Float64Array(D), std = new Float64Array(D);
+  for (let i = 0; i < N; i++) for (let j = 0; j < D; j++) mean[j] += X[i * D + j];
+  for (let j = 0; j < D; j++) mean[j] /= N;
+  for (let i = 0; i < N; i++) for (let j = 0; j < D; j++) { const d = X[i * D + j] - mean[j]; std[j] += d * d; }
+  for (let j = 0; j < D; j++) { std[j] = Math.sqrt(std[j] / N); if (std[j] < 1e-8) std[j] = 1; }
+  for (let i = 0; i < N; i++) for (let j = 0; j < D; j++) X[i * D + j] = (X[i * D + j] - mean[j]) / std[j];
+
+  const m = { classes, N, X, y, mean: Float32Array.from(mean), std: Float32Array.from(std), selfCheck: null };
+  model = m;
+
+  // self-check on held-out rows
+  setStep("stepModel", "busy", "Checking the model…");
+  let right = 0, total = 0;
+  for (const [label, c] of tests) {
+    if (!cidx.has(label)) continue;
+    for (const row of c.rows) {
+      total++;
+      if (knnRaw(standardize(row))[0].label === label) right++;
+      if (total % 40 === 0) { fill.style.width = (90 + 10 * Math.min(1, total / 400)) + "%"; await tick(); }
+    }
+  }
+  m.selfCheck = total ? right / total : null;
+  fill.style.width = "100%";
+  setTimeout(() => { bar.hidden = true; }, 400);
+  return m;
+}
+
+/* ---------- saving the model in the browser (IndexedDB) ---------- */
+const idb = () => new Promise((res, rej) => {
+  const r = indexedDB.open("isl-reader", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("model");
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+async function saveModel(m) {
+  try {
+    const db = await idb();
+    await new Promise((res, rej) => { const tx = db.transaction("model", "readwrite"); tx.objectStore("model").put(m, "current"); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    return true;
+  } catch (e) { return false; }
+}
+async function loadSaved() {
+  try {
+    const db = await idb();
+    return await new Promise((res, rej) => { const q = db.transaction("model").objectStore("model").get("current"); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); });
+  } catch (e) { return null; }
+}
+async function forgetSaved() {
+  try {
+    const db = await idb();
+    await new Promise((res, rej) => { const tx = db.transaction("model", "readwrite"); tx.objectStore("model").delete("current"); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  } catch (e) { /* nothing saved */ }
+}
+function showModelReady(saved) {
+  const pct = model.selfCheck == null ? "" : " · self-check " + (model.selfCheck * 100).toFixed(1) + "%";
+  setStep("stepModel", "ok",
+    "<b>" + model.classes.length + " signs</b> · " + model.N.toLocaleString() + " reference samples" + pct +
+    "<small>" + (saved ? "Saved in this browser." : "Could not be saved here, so you will need to choose the file again next time.") +
+    " The self-check uses frames that look like the saved ones, so real-camera accuracy will be lower.</small>");
+  $("csvBtn").textContent = "Replace model data";
+  $("csvBtn").classList.remove("primary");
+  $("forgetBtn").hidden = false;
+}
+
+/* ---------- MediaPipe hand detector (loaded from a CDN) ---------- */
+async function initDetector(modelBuffer) {
+  setStep("stepDet", "busy", "Loading…");
+  $("detFallback").hidden = true;
+  let lastErr = null;
+  for (const base of MP_BASES) {
+    try {
+      const mod = await import(base + "/vision_bundle.mjs");
+      const files = await mod.FilesetResolver.forVisionTasks(base + "/wasm");
+      const baseOptions = modelBuffer ? { modelAssetBuffer: modelBuffer, delegate: "CPU" } : { modelAssetPath: MODEL_URL, delegate: "CPU" };
+      landmarker = await mod.HandLandmarker.createFromOptions(files, {
+        baseOptions, runningMode: "IMAGE", numHands: 2,
+        minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4,
+      });
+      setStep("stepDet", "ok", "Ready.");
+      return true;
+    } catch (e) { lastErr = e; }
+  }
+  setStep("stepDet", "bad",
+    "Could not load the hand detector. Check your internet connection and reload this page." +
+    "<small>" + esc(lastErr && lastErr.message ? lastErr.message : lastErr) + "</small>" +
+    "<small>Still failing? Download <b>hand_landmarker.task</b> from the link below, then pick it here:<br>" + esc(MODEL_URL) + "</small>");
+  $("detFallback").hidden = false;
+  return false;
+}
+
+function detectHands(source) {
+  if (!landmarker) throw new Error("The hand detector is not ready yet.");
+  const res = landmarker.detect(source);
+  const hands = (res.landmarks || []).map((h) => h.map((p) => ({ x: p.x, y: p.y, z: p.z })));
+  hands.sort((a, b) => a[0].x - b[0].x);
+  return hands;
+}
+function analyze(source) {
+  let hands = detectHands(source);
+  const shown = hands;
+  if ($("mirrorBox").checked) hands = mirrorHands(hands);
+  const feats = toFeatures(hands);
+  const out = { hands: shown.length, landmarks: shown, top: [] };
+  if (feats && model) out.top = classify(feats);
+  return out;
+}
+
+/* ---------- drawing + reading panel ---------- */
+const overlay = $("overlay"), octx = overlay.getContext("2d");
+function drawHands(hands, w, h) {
+  if (overlay.width !== w || overlay.height !== h) { overlay.width = w; overlay.height = h; }
+  octx.clearRect(0, 0, w, h);
+  const lw = Math.max(2, w / 260);
+  octx.lineWidth = lw;
+  hands.forEach((pts, i) => {
+    const color = i === 0 ? "#53d7c8" : "#f2b01e";
+    octx.strokeStyle = color; octx.fillStyle = color;
+    for (const [a, b] of CONNECTIONS) { octx.beginPath(); octx.moveTo(pts[a].x * w, pts[a].y * h); octx.lineTo(pts[b].x * w, pts[b].y * h); octx.stroke(); }
+    for (const p of pts) { octx.beginPath(); octx.arc(p.x * w, p.y * h, lw * 1.5, 0, 7); octx.fill(); }
+  });
+}
+function showReading(r) {
+  const th = +$("threshold").value / 100;
+  const letter = $("letter"), fill = $("meterFill"), msg = $("readMsg"), list = $("topList");
+  if (!r.hands) {
+    letter.textContent = "–"; fill.style.width = "0"; list.innerHTML = "";
+    msg.textContent = "No hand found. Keep your whole hand in view, with good light.";
+    return;
+  }
+  if (!model) {
+    letter.textContent = "?"; fill.style.width = "0"; list.innerHTML = "";
+    msg.textContent = r.hands + (r.hands > 1 ? " hands" : " hand") + " found. Choose your landmarks.csv in step 1 to see the letter.";
+    return;
+  }
+  if (!r.top.length) { letter.textContent = "–"; fill.style.width = "0"; list.innerHTML = ""; msg.textContent = "Hand found, but it could not be read. Try again."; return; }
+  const t = r.top[0], pct = Math.round(t.conf * 100);
+  letter.textContent = t.label;
+  fill.style.width = pct + "%";
+  fill.classList.toggle("low", t.conf < th);
+  msg.textContent = pct + "% confident · " + r.hands + (r.hands > 1 ? " hands" : " hand") + (t.conf < th ? " · below your minimum" : "");
+  list.innerHTML = r.top.map((x) => "<li>" + esc(x.label) + " " + Math.round(x.conf * 100) + "%</li>").join("");
+}
+
+/* ---------- text builder ---------- */
+function feedText(r) {
+  const th = +$("threshold").value / 100;
+  const top = r.top && r.top[0];
+  if (!r.hands) { streak = { label: null, n: 0 }; armed = true; $("holdFill").style.width = "0"; return; }
+  if (!top || top.conf < th) { streak = { label: null, n: 0 }; $("holdFill").style.width = "0"; return; }
+  if (streak.label === top.label) streak.n++;
+  else { streak = { label: top.label, n: 1 }; armed = true; }
+  $("holdFill").style.width = Math.min(100, (streak.n / HOLD) * 100) + "%";
+  if (streak.n >= HOLD && armed) { text += top.label; armed = false; $("sentence").textContent = text; }
+}
+
+/* ---------- camera ---------- */
+const video = $("video"), stage = $("stage"), photoCanvas = $("photoCanvas");
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStep("stepCam", "bad", "This page cannot use the camera here. Open it in Chrome or Edge by double-clicking the file.");
+    return;
+  }
+  setStep("stepCam", "busy", "Asking for camera permission…");
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 960 }, height: { ideal: 720 }, facingMode: "user" }, audio: false });
+  } catch (e) {
+    const name = e && e.name;
+    setStep("stepCam", "bad", name === "NotAllowedError" ? "Camera is blocked. Click the camera icon in the address bar, allow it, then press Start camera again."
+      : name === "NotFoundError" ? "No camera was found on this computer." : "Could not open the camera: " + esc(e.message || e));
+    return;
+  }
+  video.srcObject = stream;
+  await video.play();
+  photoCanvas.hidden = true; video.hidden = false; $("empty").hidden = true;
+  stage.classList.add("mirror");
+  stage.style.setProperty("--ar", (video.videoWidth || 4) + " / " + (video.videoHeight || 3));
+  $("startBtn").disabled = true; $("stopBtn").disabled = false;
+  setStep("stepCam", "ok", "On.");
+  live = true; requestAnimationFrame(loop);
+}
+function stopCamera() {
+  live = false;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null; video.srcObject = null;
+  $("startBtn").disabled = false; $("stopBtn").disabled = true;
+  setStep("stepCam", "idle", "Off.");
+  streak = { label: null, n: 0 }; armed = true; $("holdFill").style.width = "0";
+}
+function loop() {
+  if (!live) return;
+  const now = performance.now();
+  if (!busy && now - lastRun >= 110 && video.readyState >= 2 && video.videoWidth) {
+    lastRun = now; busy = true;
+    try {
+      const r = analyze(video);
+      drawHands(r.landmarks, video.videoWidth, video.videoHeight);
+      showReading(r); feedText(r);
+    } catch (e) { $("readMsg").textContent = e.message || String(e); }
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- photo upload ---------- */
+async function handlePhoto(file) {
+  if (live) stopCamera();
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("This image could not be opened. Use a JPG or PNG photo.")); img.src = url; });
+    const s = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * s)), h = Math.max(1, Math.round(img.naturalHeight * s));
+    photoCanvas.width = w; photoCanvas.height = h;
+    photoCanvas.getContext("2d").drawImage(img, 0, 0, w, h);
+    photoCanvas.hidden = false; video.hidden = true; $("empty").hidden = true;
+    stage.classList.remove("mirror");
+    stage.style.setProperty("--ar", w + " / " + h);
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    $("readMsg").textContent = "Reading the photo…";
+    await tick();
+    const r = analyze(photoCanvas);
+    drawHands(r.landmarks, w, h);
+    showReading(r);
+  } catch (e) {
+    $("readMsg").textContent = e.message || String(e);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+/* ---------- wiring ---------- */
+$("csvBtn").onclick = () => $("csvInput").click();
+$("csvInput").onchange = async (ev) => {
+  const file = ev.target.files[0]; ev.target.value = "";
+  if (!file) return;
+  try {
+    await buildModel(file);
+    const saved = await saveModel(model);
+    showModelReady(saved);
+    $("readMsg").textContent = "Model ready. Show a sign.";
+  } catch (e) {
+    model = null; $("loadBar").hidden = true;
+    setStep("stepModel", "bad", esc(e.message || e));
+  }
+};
+$("forgetBtn").onclick = async () => {
+  await forgetSaved(); model = null;
+  setStep("stepModel", "idle", "Choose the <b>landmarks.csv</b> file saved after training. It is read once and kept in this browser.");
+  $("csvBtn").textContent = "Choose landmarks.csv"; $("csvBtn").classList.add("primary"); $("forgetBtn").hidden = true;
+};
+$("taskBtn").onclick = () => $("taskInput").click();
+$("taskInput").onchange = async (ev) => {
+  const f = ev.target.files[0]; ev.target.value = "";
+  if (f) await initDetector(new Uint8Array(await f.arrayBuffer()));
+};
+$("startBtn").onclick = startCamera;
+$("stopBtn").onclick = stopCamera;
+$("photoBtn").onclick = () => $("photoInput").click();
+$("photoInput").onchange = (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) handlePhoto(f); };
+$("threshold").oninput = (e) => { $("thVal").textContent = e.target.value + "%"; };
+$("spaceBtn").onclick = () => { text += " "; $("sentence").textContent = text; };
+$("backBtn").onclick = () => { text = text.slice(0, -1); $("sentence").textContent = text; };
+$("clearBtn").onclick = () => { text = ""; $("sentence").textContent = text; };
+$("speakBtn").onclick = () => {
+  if (!text.trim() || !("speechSynthesis" in window)) return;
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text.toLowerCase()));
+};
+
+/* test hooks (harmless) */
+window.__isl = { toFeatures, analyze, hasModel: () => !!model, text: () => text };
+
+(async function boot() {
+  initDetector();
+  const saved = await loadSaved();
+  if (saved && saved.X && saved.classes) { model = saved; showModelReady(true); }
+})();
+</script>
+</body>
+</html>
